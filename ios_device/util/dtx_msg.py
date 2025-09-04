@@ -11,10 +11,12 @@ dtx msg 分为几层，按顺序
 import io
 import plistlib
 from abc import ABC
+from dataclasses import dataclass
 from enum import Enum
+from typing import List
 
 from construct import Struct, Int32ul, Int16ul, Int64ul, Const, Prefixed, GreedyBytes, this, Adapter, Select, \
-    GreedyRange, Switch, Default, Int64sl, Int32sl
+    GreedyRange, Switch, Default, Int64sl, Int32sl, CString, Array
 from ios_device.util.variables import LOG
 
 from . import Log
@@ -56,12 +58,35 @@ class RawInt32(Raw):
         self.data = data
 
 
+@dataclass
+class InfoRequest:
+    magic = 'infoRequest'
+    items: List[str]
+
+
 class PlistAdapter(Adapter, ABC):
     def _decode(self, obj, context, path):
         return unarchive(obj)
 
     def _encode(self, obj, context, path):
         return archive(obj)
+
+
+info_request_struct = Struct(
+    "magic" / CString("utf8"),
+    "count" / Int32ul,
+    "items" / Array(this.count,
+                    Prefixed(Int32ul, CString("utf8"))
+                    )
+)
+
+
+class InfoReqAdapter(Adapter):
+    def _decode(self, obj, ctx, path):
+        return info_request_struct.parse(obj)
+
+    def _encode(self, obj: InfoRequest, ctx, path):
+        return info_request_struct.build({'magic': obj.magic, 'count': len(obj.items), 'items': obj.items})
 
 
 dtx_message_header = Struct(
@@ -88,9 +113,12 @@ dtx_message_aux = Struct(
         'magic' / Select(Const(0xa, Int32ul), Int32ul),
         'type' / Int32ul,
         'value' / Switch(this.type,
-                         {1: Prefixed(Int32ul, GreedyBytes), 2: PlistAdapter(Prefixed(Int32ul, GreedyBytes)), 3: Int32sl,
+                         {1: Prefixed(Int32ul, GreedyBytes),
+                          2: PlistAdapter(Prefixed(Int32ul, GreedyBytes)),
+                          3: Int32sl,
                           4: Int64ul, 5: Int32ul,
-                          6: Int64sl},
+                          6: Int64sl,
+                          12: InfoReqAdapter(GreedyBytes)},
                          default=GreedyBytes),
     )))
 )
@@ -98,11 +126,15 @@ dtx_message_aux = Struct(
 server_push_dtx_message_aux = Struct(
     'magic' / Default(Int64ul, 0x1f0),
     'data' / Prefixed(Int64ul, GreedyRange(Struct(
+        'magic' / Select(Const(0xa, Int32ul), Int32ul),
         'type' / Int32ul,
         'value' / Switch(this.type,
-                         {1: Prefixed(Int32ul, GreedyBytes), 2: PlistAdapter(Prefixed(Int32ul, GreedyBytes)), 3: Int32sl,
+                         {1: Prefixed(Int32ul, GreedyBytes),
+                          2: PlistAdapter(Prefixed(Int32ul, GreedyBytes)),
+                          3: Int32sl,
                           4: Int64ul, 5: Int32ul,
-                          6: Int64sl},
+                          6: Int64sl,
+                          12: InfoReqAdapter(GreedyBytes)},
                          default=GreedyBytes),
     )))
 )
@@ -132,6 +164,10 @@ class MessageAux:
 
     def append_obj(self, value):
         self.values.append({'type': 2, 'value': value})
+        return self
+
+    def append_info(self, value):
+        self.values.append({'type': 12, 'value': value, 'magic':1})
         return self
 
     def __bytes__(self):
@@ -166,10 +202,12 @@ class DTXMessage:
         if ret._payload_header.total_length == 0:
             return ret
         if ret._payload_header.aux_length:
+            aux_data = payload_io.read(ret._payload_header.aux_length)
             if ret._payload_header.flags == 0x0:
-                auxiliaries = server_push_dtx_message_aux.parse(payload_io.read(ret._payload_header.aux_length)).data
+                auxiliaries = server_push_dtx_message_aux.parse(aux_data).data
             else:
-                auxiliaries = dtx_message_aux.parse(payload_io.read(ret._payload_header.aux_length)).data
+                auxiliaries = dtx_message_aux.parse(aux_data).data
+            ret._auxiliaries = [[i.value, i.type] for i in auxiliaries]
             ret.auxiliaries = [i.value for i in auxiliaries]
         else:
             ret.auxiliaries = []
@@ -184,7 +222,7 @@ class DTXMessage:
                     ret._selector = InstrumentRPCParseError(data)
                 else:
                     break
-
+        # ret._expects_reply = ret._message_header.expects_reply
         payload_io.close()
         log.debug(f'DTX msg decode: {ret.selector} :{ret.auxiliaries}')
         return ret
@@ -258,6 +296,8 @@ def object_to_aux(arg, aux: MessageAux):
         if isinstance(arg, RawInt32):
             for i in arg.data:
                 aux.append_int(i)
+    elif isinstance(arg, InfoRequest):
+        aux.append_info(arg)
     else:
         aux.append_obj(arg)
 

@@ -5,7 +5,7 @@ from collections import defaultdict
 from threading import Thread, Event
 
 from ..util import logging, Log
-from ..util.dtx_msg import DTXMessage, MessageAux, dtx_message_header, object_to_aux
+from ..util.dtx_msg import DTXMessage, MessageAux, dtx_message_header, object_to_aux, InfoRequest
 from ..util.exceptions import MuxError
 from ..util.variables import LOG
 
@@ -99,7 +99,6 @@ class DTXServer:
         def _notifyOfPublishedCapabilities(res):
             self.done.set()
             self._published_capabilities = res.auxiliaries
-
         self.register_selector_callback("_notifyOfPublishedCapabilities:", _notifyOfPublishedCapabilities)
 
     def init(self, _cli=None):
@@ -109,6 +108,7 @@ class DTXServer:
         """
         self._cli = _cli
         self._start()
+        self._call(True,0, '_notifyOfPublishedCapabilities:', {'com.apple.private.DTXBlockCompression': 0, 'com.apple.private.DTXConnection': 1})
         return self
 
     def _start(self):
@@ -218,6 +218,8 @@ class DTXServer:
         aux = MessageAux()
         dtx.auxiliaries = aux
         self._next_identifier += 1
+        if any([isinstance(arg, InfoRequest) for arg in auxiliaries]):
+            dtx._flags = 0
         for arg in auxiliaries:
             object_to_aux(arg, aux)
         self._client.send_dtx(self._cli, dtx)

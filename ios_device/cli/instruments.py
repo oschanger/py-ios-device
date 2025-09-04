@@ -255,7 +255,7 @@ def cmd_sysmontap(udid, network, format, time, pid, name, bundle_id, processes, 
             proc_filter = list(set(proc_filter))
             for proc in proc_filter:
                 if proc not in data:
-                    log.warn(f'{proc_filter} value：{proc} not in {data}')
+                    log.warning(f'{proc_filter} value：{proc} not in {data}')
                     return
             rpc.process_attributes = proc_filter
 
@@ -264,7 +264,7 @@ def cmd_sysmontap(udid, network, format, time, pid, name, bundle_id, processes, 
             sys_filter = sys_filter.split(',')
             for sys in sys_filter:
                 if sys not in data:
-                    log.warn(f'{sys_filter} value：{sys} not in {data}')
+                    log.warning(f'{sys_filter} value：{sys} not in {data}')
                     return
             rpc.system_attributes = sys_filter
 
